@@ -1,7 +1,8 @@
 # Build plan
 
-Status: design prepared on 2026-10-16; application implementation has not started.
-See [design.md](design.md) for recommended architecture and limitations.
+Status: local execution milestone implemented on 2026-10-16. See
+[run.md](run.md) for operation and verification, and [design.md](design.md) for
+architecture and future proposals.
 
 ## Milestones
 
@@ -16,15 +17,14 @@ See [design.md](design.md) for recommended architecture and limitations.
 
 Use correlation logs from the first slice; add observability alongside new
 boundaries instead of waiting for the last milestone. Model API access is needed
-only for milestone 3. Gemini credentials remain unconfigured based on the prior
-check; video analysis via Gemini has not been performed.
+only for milestone 3.
 
 ## First implementation task contract
 
 Goal: submit one synthetic incident investigation asynchronously and retrieve a
 deterministic diagnosis with evidence. Work only on milestone 1.
 
-Recommended structure, to refine during implementation:
+Implemented structure:
 
 ```text
 cmd/server/          HTTP server entry point and lifecycle
@@ -65,26 +65,26 @@ arbitrary sleeps. Review tests against the contract, not just the code shape.
 Run the Go race detector where supported; it detects races only on executed paths.
 See [official race-detector guidance](https://go.dev/doc/articles/race_detector).
 
-Expected commands after a module and toolchain exist are `go test ./...` and
-`go test -race ./...`; these commands are unverified for this project.
+`go test ./...`, `go vet ./...`, and `go test -race ./...` pass on the verified
+Linux toolchain. A compiled process smoke check covers submission, results,
+validation, clean SIGTERM, bind failure, invalid timeout flags, and restart loss.
 
-## AI collaboration per increment
+## Delivery workflow
 
 1. Define outcome, scope, failure behavior, and acceptance evidence.
 2. Explain the consequential choice and implement a small change.
 3. Run checks and inspect the actual outputs.
 4. Review against the contract, using a fresh reviewer for material changes.
 5. Fix substantiated findings and rerun affected checks.
-6. Explain the result, ask a targeted conceptual question, and update project state.
+6. Document the result, verification, and remaining limitations.
 
-Agent agreement is not proof. Keep proposals, implementation, and verification
-separate. Record only demonstrated understanding and measured performance.
+Review agreement is not proof. Keep proposals, implementation, and verification
+separate, and record performance claims only alongside measurements.
 
-## Setup observations
+## Next implementation milestone
 
-Git and Docker executables were found on the Windows PATH. Git is now initialized
-on `main` with `origin` set to `https://github.com/neev-rao/distributed-agent-service.git`.
-Docker engine health has not been checked.
-Go was not found on the Windows or Ubuntu WSL PATH. Ubuntu exposes Git and the
-Windows Docker CLI; Docker engine health has not been checked. Establish a Go
-toolchain before implementing milestone 1. No dependencies have been installed.
+Design durable admission and job claims before introducing PostgreSQL and
+separate worker processes. Specify submission idempotency, lease ownership,
+retry limits, stale completion rejection, and database failure behavior, then
+write crash-window acceptance tests. Kubernetes and model calls remain outside
+that milestone.
