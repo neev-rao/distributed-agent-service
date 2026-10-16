@@ -1,0 +1,32 @@
+# Local credentials and environment configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Build output and test artifacts
+/bin/
+/dist/
+/coverage/
+/coverage.out
+/coverage-*.out
+*.test
+*.prof
+
+# Python environments and caches, if introduced later
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local runtime data and operating-system files
+/tmp/
+/logs/
+*.log
+.DS_Store
+Thumbs.db
