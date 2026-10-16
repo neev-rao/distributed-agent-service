@@ -1,8 +1,8 @@
 # MVP design
 
-Status: proposed, 2026-10-16. No application code exists yet. This document turns
-the reference brief into a small starting point; choices can change before their
-implementation when the user supplies different requirements.
+Status: local execution milestone implemented, 2026-10-16. The distributed MVP
+sections describe future proposals. See [run.md](run.md) for operating instructions
+and verification evidence for the current implementation.
 
 ## Problem and example
 
@@ -10,9 +10,9 @@ Accept a potentially slow investigation as a job, execute it with bounded
 resources, and let the caller retrieve its status, evidence, and result without
 holding a connection open for the entire investigation.
 
-Recommended workload: read-only incident investigation using synthetic checkout
-service metrics, logs, and runbooks. It builds on the user's telemetry background
-and gives us known answers and controllable failures.
+The workload is read-only incident investigation using synthetic checkout service
+metrics, logs, and runbooks. Fixed evidence provides known answers and
+controllable failures without depending on a live service or model provider.
 
 The first request selects a fixture, rather than accepting arbitrary text:
 
@@ -25,8 +25,8 @@ Content-Type: application/json
 
 Return `202 Accepted`, an opaque job ID, and a `Location: /jobs/{id}` header.
 `GET /jobs/{id}` returns state and, when available, a structured result containing
-a diagnosis and fixture evidence identifiers. These are proposed contracts, not
-tested examples. A job may already be running when the submit response arrives.
+a diagnosis and fixture evidence identifiers. A job may already be running or
+finished when the submit response arrives.
 
 Later, a real agent can interpret a task such as "Investigate checkout's elevated
 error rate," choose tools, and synthesize a supported diagnosis. Model quality
@@ -40,8 +40,8 @@ and platform reliability will have separate evaluations.
 | Go API and separate Go workers using PostgreSQL | Durable acceptance, competing claims, recovery, duplicate attempts | Adds SQL, leases, migrations, and another process boundary |
 | Go API, broker, workers, and a result database | Messaging and independent queue operations | Adds infrastructure and a database/broker dual-write problem |
 
-Recommendation: build the first approach as a deliberately temporary local
-foundation, then use the second for the distributed MVP. Compare a broker again
+The first approach is implemented as a local foundation. The second is proposed
+for the distributed MVP. Compare a broker again
 only if measurements or delivery requirements justify it. Do not select NATS,
 Kafka, Redis, gRPC, or an orchestration framework just to fill a component list.
 
@@ -57,14 +57,15 @@ flowchart LR
     Workers --> Jobs
 ```
 
-These are components inside one process, not separate network services. Use Go
-for all of them initially. The fake executor follows a fixed path and is not yet
-an autonomous agent. Introduce Python only if a chosen library justifies it.
+These are components inside one Go process, not separate network services. The
+fixture executor follows a fixed path and is not an autonomous agent. Introduce
+Python only if a chosen library justifies a new language boundary.
 
 The job store owns authoritative state. Queue entries contain job IDs. Admission
 must reserve capacity and publish executable work consistently: a rejected
-request leaves neither a job record nor work that might run later. The precise
-synchronization belongs in the first implementation review.
+request leaves neither a job record nor work that might run later. A single mutex
+protects record creation, queue capacity, claims, and terminal transitions.
+Workers wait on a condition variable; executor calls run outside the state lock.
 
 ## Local request lifecycle and guarantees
 
@@ -80,14 +81,14 @@ synchronization belongs in the first implementation review.
    overwritten by a late completion.
 6. A caller polls the job ID. Unknown IDs return `404`; known jobs return `200`.
 
-Start with two workers, up to eight waiting jobs, and at most 1,000 retained job
+The defaults are two workers, up to eight waiting jobs, and at most 1,000 retained job
 records per process. Queue admission counts waiting work; moving a job to running
 releases its waiting slot. At most ten jobs can be waiting or running. Limits
 must hold under concurrent submission, not merely in a sequential demonstration.
 At the record limit, reject new work until restart; cleanup/retention is a later
-design. Bound request and result sizes as well as record count.
+design. Request bodies are bounded to 16 KiB and serialized results to 64 KiB.
 
-Proposed execution timeout: five seconds starting at `running`; queue waiting is
+Default execution timeout: five seconds starting at `running`; queue waiting is
 separate. Use a service-owned job context, so returning the submit response or
 disconnecting the caller does not cancel accepted work. Execution cancellation
 is cooperative: the fixture executor must honor it; a context cannot forcibly
@@ -96,8 +97,9 @@ stop arbitrary code. No public cancellation endpoint in this slice.
 On timeout, record `failed` / `execution_timeout`; on executor error, record
 `failed` / `execution_failed`. On graceful shutdown, stop admission and allow a
 bounded drain, then mark remaining jobs failed with `service_shutdown` and cancel
-execution before exit. No queued job may start after the drain deadline. Exact
-grace duration is a configuration choice to test.
+execution before exit. No queued job may start after the drain deadline or drain
+cancellation. Default grace is ten seconds; execution timeout and shutdown grace
+are configurable CLI flags.
 Abrupt termination loses every job and result. There are no automatic retries.
 
 If a submit response is lost after admission, the client cannot know whether its
@@ -141,7 +143,7 @@ policy before this becomes a long-lived service.
 
 After local distributed execution works, deploy an API Deployment with a
 ClusterIP Service, a worker Deployment, and PostgreSQL backed by persistent
-storage in a local learning cluster. Workers pull jobs and do not require a
+storage in a local development cluster. Workers pull jobs and do not require a
 Service for inbound dispatch. Use port-forwarding for the initial demo. A single
 database with a volume is not a highly available database or a backup strategy.
 
@@ -172,5 +174,6 @@ development should bind to loopback; public exposure needs a separate design.
 - Observability: follow a job ID through attempts and tools; measure queue wait
   separately from execution time and end-to-end latency.
 
-No guarantee above has been implemented or verified yet. Workload, limits, and
-storage are recommended starting choices, not user-approved requirements.
+The local lifecycle and bounds are covered by automated tests and a compiled
+process smoke check. Durability, recovery, model execution, and deployment
+guarantees described in the future sections remain unimplemented.

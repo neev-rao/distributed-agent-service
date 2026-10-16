@@ -25,6 +25,7 @@ __pycache__/
 .pytest_cache/
 
 # Local runtime data and operating-system files
+/.local/
 /tmp/
 /logs/
 *.log
