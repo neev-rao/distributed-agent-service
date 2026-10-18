@@ -3,12 +3,15 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/neev-rao/distributed-agent-service/internal/durable"
 	"github.com/neev-rao/distributed-agent-service/internal/fixture"
 	"github.com/neev-rao/distributed-agent-service/internal/jobs"
 )
@@ -16,11 +19,38 @@ import (
 const MaxRequestBytes int64 = 16 << 10
 
 type handler struct {
-	manager *jobs.Manager
+	backend   Backend
+	localMode bool
 }
 
 func New(manager *jobs.Manager) http.Handler {
-	return &handler{manager: manager}
+	return &handler{backend: localBackend{manager}, localMode: true}
+}
+
+// Backend permits durable admission and lookup without coupling HTTP to workers.
+type Backend interface {
+	Submit(context.Context, string, string) (jobs.Job, error)
+	Get(context.Context, string) (jobs.Job, bool, error)
+}
+
+func NewWithBackend(backend Backend) http.Handler {
+	return &handler{backend: backend}
+}
+
+var errLocalIdempotency = errors.New("idempotency requires durable mode")
+
+type localBackend struct{ manager *jobs.Manager }
+
+func (b localBackend) Submit(_ context.Context, scenario, key string) (jobs.Job, error) {
+	if key != "" {
+		return jobs.Job{}, errLocalIdempotency
+	}
+	return b.manager.Submit(scenario)
+}
+
+func (b localBackend) Get(_ context.Context, id string) (jobs.Job, bool, error) {
+	job, ok := b.manager.Get(id)
+	return job, ok, nil
 }
 
 type errorBody struct {
@@ -47,9 +77,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET to retrieve a job.")
 			return
 		}
-		job, found := h.manager.Get(id)
+		operationCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		job, found, err := h.backend.Get(operationCtx, id)
+		if err != nil {
+			writeUnavailable(w)
+			return
+		}
 		if !found {
-			writeError(w, http.StatusNotFound, "job_not_found", "No job with this ID exists in this process.")
+			writeError(w, http.StatusNotFound, "job_not_found", "No retained job with this ID exists.")
 			return
 		}
 		writeJSON(w, http.StatusOK, job)
@@ -89,19 +125,38 @@ func (h *handler) submit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown_scenario", "scenario_id must be checkout-db-timeout.")
 		return
 	}
-	job, err := h.manager.Submit(input.ScenarioID)
+	keys := r.Header.Values("Idempotency-Key")
+	key := r.Header.Get("Idempotency-Key")
+	if len(keys) > 1 || (len(keys) > 0 && !validKey(key)) {
+		writeError(w, http.StatusBadRequest, "invalid_idempotency_key", "Use a single Idempotency-Key of 1 to 128 visible ASCII characters without spaces.")
+		return
+	}
+	operationCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	job, err := h.backend.Submit(operationCtx, input.ScenarioID, key)
 	if err != nil {
 		w.Header().Set("Retry-After", "1")
 		switch {
 		case errors.Is(err, jobs.ErrQueueFull):
 			writeError(w, http.StatusServiceUnavailable, "queue_full", "All waiting slots are occupied; retry later.")
 		case errors.Is(err, jobs.ErrRecordLimit):
-			writeError(w, http.StatusServiceUnavailable, "record_limit", "The retained job limit is reached; restart the process to accept more work. Restarting loses all jobs and results.")
+			message := "The retained job limit is reached; clean up expired terminal jobs. Restarting the API does not release durable records."
+			if h.localMode {
+				message = "The retained job limit is reached; restart the local process to accept more work. Restarting loses all local jobs and results."
+			}
+			writeError(w, http.StatusServiceUnavailable, "record_limit", message)
 		case errors.Is(err, jobs.ErrShuttingDown):
 			writeError(w, http.StatusServiceUnavailable, "service_shutting_down", "The service is shutting down and no longer accepts jobs.")
-		default:
+		case errors.Is(err, durable.ErrIdempotencyConflict):
 			w.Header().Del("Retry-After")
-			writeError(w, http.StatusInternalServerError, "internal_error", "Could not submit the job.")
+			writeError(w, http.StatusConflict, "idempotency_conflict", "This Idempotency-Key was already used for a different request.")
+		case errors.Is(err, errLocalIdempotency):
+			w.Header().Del("Retry-After")
+			writeError(w, http.StatusBadRequest, "idempotency_unavailable", "Idempotency-Key requires durable mode.")
+		default:
+			// Commit acknowledgment can be ambiguous after a connection failure.
+			// Clients should retry with the same key, not assume nothing happened.
+			writeUnavailable(w)
 		}
 		return
 	}
@@ -111,6 +166,23 @@ func (h *handler) submit(w http.ResponseWriter, r *http.Request) {
 		ID        string `json:"id"`
 		StatusURL string `json:"status_url"`
 	}{ID: job.ID, StatusURL: location})
+}
+
+func validKey(key string) bool {
+	if len(key) == 0 || len(key) > 128 {
+		return false
+	}
+	for _, c := range []byte(key) {
+		if c < 33 || c > 126 {
+			return false
+		}
+	}
+	return true
+}
+
+func writeUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "1")
+	writeError(w, http.StatusServiceUnavailable, "storage_unavailable", "Job storage is unavailable. Retry submissions with the same Idempotency-Key because their outcome may be uncertain.")
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

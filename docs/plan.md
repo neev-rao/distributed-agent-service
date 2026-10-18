@@ -1,6 +1,6 @@
 # Build plan
 
-Status: local execution milestone implemented on 2026-10-16. See
+Status: durable execution milestone implemented on 2026-10-17. See
 [run.md](run.md) for operation and verification, and [design.md](design.md) for
 architecture and future proposals.
 
@@ -19,7 +19,7 @@ Use correlation logs from the first slice; add observability alongside new
 boundaries instead of waiting for the last milestone. Model API access is needed
 only for milestone 3.
 
-## First implementation task contract
+## Completed local implementation contract (`-local`)
 
 Goal: submit one synthetic incident investigation asynchronously and retrieve a
 deterministic diagnosis with evidence. Work only on milestone 1.
@@ -81,10 +81,27 @@ validation, clean SIGTERM, bind failure, invalid timeout flags, and restart loss
 Review agreement is not proof. Keep proposals, implementation, and verification
 separate, and record performance claims only alongside measurements.
 
-## Next implementation milestone
+## Completed durable implementation contract
 
-Design durable admission and job claims before introducing PostgreSQL and
-separate worker processes. Specify submission idempotency, lease ownership,
-retry limits, stale completion rejection, and database failure behavior, then
-write crash-window acceptance tests. Kubernetes and model calls remain outside
-that milestone.
+The API acknowledges committed PostgreSQL admission. Separate Go workers claim
+and renew attempts, reject stale completions, and recover expired leases with a
+bounded attempt count and backoff. Shared queue/record limits remain transactional,
+matching idempotency keys replay retained jobs, and cleanup removes only expired
+terminal records. See [durability.md](durability.md) for the precise guarantees.
+
+Validation tightened two points: tokens protect stored results rather than
+external effects, and recovery reserves freed queue capacity before new arrivals
+can starve expired work. Shared policy is persisted to reject inconsistent process
+configuration. Ordinary execution failure is terminal only if its write is
+confirmed; database uncertainty can lead to repeated execution.
+
+PostgreSQL integration tests use isolated schemas and require TEST_DATABASE_URL.
+The explicit integration script fails when that variable is absent rather than
+silently reporting skipped database checks as verification.
+
+## Next milestone
+
+Define a concrete model/tool task and objective evaluation criteria before adding
+the bounded agent runtime. Keep model quality separate from execution reliability.
+Resource-aware scheduling, Kubernetes, and product differentiation require their
+own scoped designs and evidence.
