@@ -1,8 +1,10 @@
 # MVP design
 
-Status: local execution milestone implemented, 2026-10-16. The distributed MVP
-sections describe future proposals. See [run.md](run.md) for operating instructions
-and verification evidence for the current implementation.
+Status: durable execution implemented, 2026-10-17. The default API and separate
+workers share PostgreSQL. The original volatile mode remains available explicitly
+with `-local`. See [run.md](run.md) and [durability.md](durability.md) for the
+current operating and failure contracts. Model execution and Kubernetes are future
+milestones.
 
 ## Problem and example
 
@@ -34,18 +36,18 @@ and platform reliability will have separate evaluations.
 
 ## Architecture choices
 
-| Approach | What it teaches | Cost and limitation |
+| Approach | Primary behavior | Cost and limitation |
 | --- | --- | --- |
 | Go API with an internal worker pool | Admission, state transitions, concurrency, deadlines | One process; all jobs disappear on restart |
 | Go API and separate Go workers using PostgreSQL | Durable acceptance, competing claims, recovery, duplicate attempts | Adds SQL, leases, migrations, and another process boundary |
 | Go API, broker, workers, and a result database | Messaging and independent queue operations | Adds infrastructure and a database/broker dual-write problem |
 
-The first approach is implemented as a local foundation. The second is proposed
-for the distributed MVP. Compare a broker again
+The first approach is retained for local demonstrations. The second is the
+current default. Compare a broker again
 only if measurements or delivery requirements justify it. Do not select NATS,
 Kafka, Redis, gRPC, or an orchestration framework just to fill a component list.
 
-### First local slice
+### Original local slice (`-local` only)
 
 ```mermaid
 flowchart LR
@@ -67,7 +69,7 @@ request leaves neither a job record nor work that might run later. A single mute
 protects record creation, queue capacity, claims, and terminal transitions.
 Workers wait on a condition variable; executor calls run outside the state lock.
 
-## Local request lifecycle and guarantees
+## Volatile local-mode lifecycle and guarantees
 
 1. Validate the bounded JSON body and known scenario ID. Malformed/unknown input
    returns `400`; an oversized body returns `413`.
@@ -106,7 +108,7 @@ If a submit response is lost after admission, the client cannot know whether its
 job exists. Resubmission can create another job. Submission idempotency is a
 later feature; do not describe this slice as reliable or durable delivery.
 
-## Distributed MVP direction
+## Durable execution (current default)
 
 Run separate Go API and Go worker processes. Both access PostgreSQL through a
 shared job-state package. External clients use HTTP/JSON; workers use SQL for
@@ -121,10 +123,11 @@ row locking; never hold a database transaction open during model execution.
 `SKIP LOCKED` is intended to support competing queue consumers, but it does not
 provide strict FIFO fairness. See [PostgreSQL locking documentation](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE).
 
-Each claim issues a new attempt token and a renewable lease. Complete or renew
-only when the token is current and ownership remains valid. Define retryable
-errors, backoff, maximum attempts, job expiration, and recovery before building
-this milestone. Use database time for lease decisions and test expiration races.
+Each claim issues a new attempt token and renewable lease. Renewals/completions
+require the current unexpired ownership. Lost leases retry with backoff, capped
+at three claims; confirmed execution errors/timeouts are terminal. Database time
+decides ownership and validates completion. The exact retention, deadline, retry,
+and ambiguous-commit rules are specified in [durability.md](durability.md).
 
 A lost worker can keep executing after lease expiration while a replacement
 starts. Conditional state updates reject stale results; they cannot prevent a
@@ -135,9 +138,9 @@ problems and need separate tests.
 
 There is no separate scheduler or worker registration service initially. Workers
 pull available work; claiming grants ownership of a job. This implements simple
-work distribution, not resource-aware scheduling. Bound backlog and execution
-concurrency here too, with transactional admission and an explicit result cleanup
-policy before this becomes a long-lived service.
+work distribution, not resource-aware scheduling. Transactional admission bounds
+the shared backlog and retained records. Execution concurrency is two per worker
+process. Bounded cleanup removes eligible terminal records after retention.
 
 ## Kubernetes mapping and scope
 
@@ -174,6 +177,6 @@ development should bind to loopback; public exposure needs a separate design.
 - Observability: follow a job ID through attempts and tools; measure queue wait
   separately from execution time and end-to-end latency.
 
-The local lifecycle and bounds are covered by automated tests and a compiled
-process smoke check. Durability, recovery, model execution, and deployment
-guarantees described in the future sections remain unimplemented.
+The local lifecycle and durable PostgreSQL contracts have automated verification.
+Model-directed tools and Kubernetes deployment remain unimplemented. No
+throughput or production-availability claim is made.

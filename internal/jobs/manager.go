@@ -25,7 +25,7 @@ const (
 
 var (
 	ErrQueueFull    = errors.New("waiting queue is full")
-	ErrRecordLimit  = errors.New("retained job record limit reached; restart required")
+	ErrRecordLimit  = errors.New("retained job record limit reached")
 	ErrShuttingDown = errors.New("service is shutting down")
 )
 
@@ -40,14 +40,16 @@ type JobError struct {
 }
 
 type Job struct {
-	ID         string     `json:"id"`
-	ScenarioID string     `json:"scenario_id"`
-	State      State      `json:"state"`
-	CreatedAt  time.Time  `json:"created_at"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	Result     *Result    `json:"result,omitempty"`
-	Error      *JobError  `json:"error,omitempty"`
+	ID          string     `json:"id"`
+	ScenarioID  string     `json:"scenario_id"`
+	State       State      `json:"state"`
+	CreatedAt   time.Time  `json:"created_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	Result      *Result    `json:"result,omitempty"`
+	Error       *JobError  `json:"error,omitempty"`
+	Attempt     int        `json:"attempt,omitempty"`
+	MaxAttempts int        `json:"max_attempts,omitempty"`
 }
 
 // Execute must honor cancellation and must not mutate a result after returning it.
