@@ -26,6 +26,9 @@ var migrations embed.FS
 type Config struct {
 	QueueCapacity, MaxRecords, MaxAttempts, MaxResultBytes   int
 	ExecutionTimeout, LeaseDuration, RetryBackoff, Retention time.Duration
+	// ExecutionProfile identifies the executor and its model/prompt/budget
+	// policy. It must never contain credentials or other secret material.
+	ExecutionProfile string
 }
 
 func DefaultConfig() Config {
@@ -33,6 +36,7 @@ func DefaultConfig() Config {
 		QueueCapacity: 8, MaxRecords: 1000, MaxAttempts: 3, MaxResultBytes: 64 << 10,
 		ExecutionTimeout: 5 * time.Second, LeaseDuration: 10 * time.Second,
 		RetryBackoff: time.Second, Retention: 24 * time.Hour,
+		ExecutionProfile: "fixture-v1",
 	}
 }
 
@@ -57,6 +61,14 @@ func Open(ctx context.Context, dsn string, config Config) (*Store, error) {
 		config.RetryBackoff < time.Microsecond || config.Retention < time.Microsecond {
 		return nil, errors.New("durable capacities and durations must be positive (durations at least one microsecond)")
 	}
+	if len(config.ExecutionProfile) < 1 || len(config.ExecutionProfile) > 256 {
+		return nil, errors.New("execution profile must contain 1..256 printable ASCII bytes")
+	}
+	for _, b := range []byte(config.ExecutionProfile) {
+		if b < 0x20 || b > 0x7e {
+			return nil, errors.New("execution profile must contain 1..256 printable ASCII bytes")
+		}
+	}
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("create database pool: %w", err)
@@ -73,7 +85,7 @@ func (s *Store) Close() { s.pool.Close() }
 // Migrate atomically applies versioned embedded SQL. An advisory transaction
 // lock coordinates concurrent process startup before the settings row exists.
 // A mismatched runtime configuration is rejected rather than silently changing
-// shared admission or recovery rules underneath another process.
+// shared admission, recovery, or execution rules underneath another process.
 func (s *Store) Migrate(ctx context.Context) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -91,33 +103,36 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err = tx.QueryRow(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_migrations").Scan(&version); err != nil {
 		return err
 	}
-	if version > 1 {
+	paths := []string{"migrations/001_initial.sql", "migrations/002_execution_profile.sql"}
+	if version > len(paths) {
 		return fmt.Errorf("database schema version %d is newer than this binary", version)
 	}
-	if version == 0 {
-		sql, readErr := migrations.ReadFile("migrations/001_initial.sql")
+	for version < len(paths) {
+		sql, readErr := migrations.ReadFile(paths[version])
 		if readErr != nil {
 			return readErr
 		}
 		if _, err = tx.Exec(ctx, string(sql)); err != nil {
-			return fmt.Errorf("migration 1: %w", err)
+			return fmt.Errorf("migration %d: %w", version+1, err)
 		}
-		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES (1)"); err != nil {
+		version++
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES ($1)", version); err != nil {
 			return err
 		}
 	}
 	c := s.config
 	if _, err = tx.Exec(ctx, `INSERT INTO service_settings
-		(singleton,queue_capacity,max_records,max_attempts,max_result_bytes,execution_timeout_us,lease_duration_us,retry_backoff_us,retention_us)
-		VALUES (true,$1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (singleton) DO NOTHING`,
-		c.QueueCapacity, c.MaxRecords, c.MaxAttempts, c.MaxResultBytes, c.ExecutionTimeout.Microseconds(), c.LeaseDuration.Microseconds(), c.RetryBackoff.Microseconds(), c.Retention.Microseconds()); err != nil {
+		(singleton,queue_capacity,max_records,max_attempts,max_result_bytes,execution_timeout_us,lease_duration_us,retry_backoff_us,retention_us,execution_profile)
+		VALUES (true,$1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (singleton) DO NOTHING`,
+		c.QueueCapacity, c.MaxRecords, c.MaxAttempts, c.MaxResultBytes, c.ExecutionTimeout.Microseconds(), c.LeaseDuration.Microseconds(), c.RetryBackoff.Microseconds(), c.Retention.Microseconds(), c.ExecutionProfile); err != nil {
 		return err
 	}
 	var matches bool
 	err = tx.QueryRow(ctx, `SELECT queue_capacity=$1 AND max_records=$2 AND max_attempts=$3 AND max_result_bytes=$4
 		AND execution_timeout_us=$5 AND lease_duration_us=$6 AND retry_backoff_us=$7 AND retention_us=$8
+		AND execution_profile=$9
 		FROM service_settings WHERE singleton`, c.QueueCapacity, c.MaxRecords, c.MaxAttempts, c.MaxResultBytes,
-		c.ExecutionTimeout.Microseconds(), c.LeaseDuration.Microseconds(), c.RetryBackoff.Microseconds(), c.Retention.Microseconds()).Scan(&matches)
+		c.ExecutionTimeout.Microseconds(), c.LeaseDuration.Microseconds(), c.RetryBackoff.Microseconds(), c.Retention.Microseconds(), c.ExecutionProfile).Scan(&matches)
 	if err != nil {
 		return err
 	}

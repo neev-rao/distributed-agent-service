@@ -3,8 +3,8 @@
 Status: durable execution implemented, 2026-10-17. The default API and separate
 workers share PostgreSQL. The original volatile mode remains available explicitly
 with `-local`. See [run.md](run.md) and [durability.md](durability.md) for the
-current operating and failure contracts. Model execution and Kubernetes are future
-milestones.
+current operating and failure contracts. Optional bounded model execution is
+implemented; see [agent.md](agent.md). Kubernetes remains a future milestone.
 
 ## Problem and example
 
@@ -30,9 +30,10 @@ Return `202 Accepted`, an opaque job ID, and a `Location: /jobs/{id}` header.
 a diagnosis and fixture evidence identifiers. A job may already be running or
 finished when the submit response arrives.
 
-Later, a real agent can interpret a task such as "Investigate checkout's elevated
-error rate," choose tools, and synthesize a supported diagnosis. Model quality
-and platform reliability will have separate evaluations.
+The optional Gemini executor interprets a fixed task such as "Investigate
+checkout's elevated error rate," chooses validated read-only fixture tools, and
+synthesizes a diagnosis. Model quality and platform reliability have separate
+evaluation paths. Arbitrary user tasks and live telemetry are outside this slice.
 
 ## Architecture choices
 
@@ -60,8 +61,9 @@ flowchart LR
 ```
 
 These are components inside one Go process, not separate network services. The
-fixture executor follows a fixed path and is not an autonomous agent. Introduce
-Python only if a chosen library justifies a new language boundary.
+fixture executor follows a fixed path. The optional model executor runs in
+durable workers behind the same executor interface. Introduce Python only if a
+chosen library justifies a new language boundary.
 
 The job store owns authoritative state. Queue entries contain job IDs. Admission
 must reserve capacity and publish executable work consistently: a rejected
@@ -178,5 +180,9 @@ development should bind to loopback; public exposure needs a separate design.
   separately from execution time and end-to-end latency.
 
 The local lifecycle and durable PostgreSQL contracts have automated verification.
-Model-directed tools and Kubernetes deployment remain unimplemented. No
-throughput or production-availability claim is made.
+Model-directed fixture tools are implemented with scripted and HTTP-fixture test
+coverage. A manually reported live evaluation with `gemini-3.8-flash` on
+2026-10-19 passed both synthetic cases and the heuristic rubric; the supplied
+diagnoses appropriately distinguished observations from uncertain causes.
+Broader model accuracy and consistency remain unmeasured. Kubernetes is
+unimplemented; no throughput or production-availability claim is made.

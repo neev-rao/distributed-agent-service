@@ -52,9 +52,15 @@ go run ./cmd/server -local
 Local mode loses all jobs on restart, has no lease recovery, and rejects
 `Idempotency-Key` instead of silently ignoring it.
 
+These commands select the deterministic fixture executor. To use Gemini with
+read-only tools, a 30-second attempt budget, and a fresh isolated database, follow
+[agent.md](agent.md). All processes sharing that database must select the same
+executor and model profile. The API does not require a provider key; the Gemini
+worker does. Configuration is never changed implicitly on an existing database.
+
 ## API
 
-Submit the supported synthetic scenario, optionally using an idempotency key:
+Submit a supported synthetic scenario, optionally using an idempotency key:
 
 ```sh
 curl -i http://127.0.0.1:8080/jobs \
@@ -87,8 +93,10 @@ terminal jobs add `finished_at` and either `result` or `error`. After recovery,
 
 Successful results contain `diagnosis` and `evidence_ids`. The fixture maps those
 identifiers to synthetic metrics, logs, and a runbook in
-`internal/fixture/executor.go`. It uses a fixed diagnosis, not model reasoning or
-live telemetry. A failed job is retrieved with HTTP `200` and `state: "failed"`.
+`internal/fixture/executor.go`. Fixture mode uses a fixed diagnosis. Gemini mode
+uses the same evidence through validated tools. The additional scenario
+`checkout-insufficient-evidence` withholds diagnostic signals in both modes. A
+failed job is retrieved with HTTP `200` and `state: "failed"`.
 
 Errors use `{"error":{"code":"...","message":"..."}}`:
 
@@ -110,6 +118,8 @@ Execution errors include `execution_failed`, `execution_timeout`,
 `result_too_large`, and `attempts_exhausted`. Lost leases retry; confirmed ordinary
 executor errors/timeouts are terminal. See [durability.md](durability.md) for the
 precise crash and database-failure contract.
+Agent mode additionally reports sanitized provider, invalid-action/result, and
+budget errors described in [agent.md](agent.md).
 
 ## Resource limits and shutdown
 
@@ -195,23 +205,45 @@ After lease expiry and backoff, GET should show the same ID completing with a
 higher attempt count. Use a fresh key for each demonstration. This delay is a
 fixture-testing aid, not part of actual inference.
 
-Verified 2026-10-17 using Go 1.27.2, Ubuntu WSL, PostgreSQL 18.6, and GCC 13.3.0:
-the complete race-checked suite (including 12 storage integration tests), static
-checks, and builds for API, worker, and database tool passed. A compiled-process
-demonstration killed an executing worker and recovered the same job ID on attempt
+Verified 2026-10-17 using Go 1.27.2, Ubuntu WSL, and PostgreSQL 18.6 in Docker
+Compose: the complete race-checked suite passed with 93 test/subtest results,
+including all 12 storage integration tests, no skipped tests, and no detected
+data races. Ordinary tests, static analysis, formatting, and builds for API,
+worker, and database tool also passed. A compiled-process demonstration against
+the Docker database killed an executing worker and recovered the same job ID on attempt
 2, preserved queued/completed records across API restarts, replayed idempotent
 submissions, and returned `503` during a real database stop before recovering on
 restart. That demonstration used a one-second lease and 100 ms backoff in a
-private test schema; default-policy storage tests also passed.
+private test schema; default-policy storage tests also passed. A separate explicit
+`-local` process check verified submission/results, input validation, clean
+shutdown, bind/flag failures, and the expected loss of jobs after restart.
 
-Docker Desktop was unavailable on the verification host, so actual tests used a
-task-local native PostgreSQL 18.6 instance. The Compose manifest is provided but
-was not runtime-verified here. No throughput, multi-host deployment, database
-crash/power-loss, or high-availability benchmark has been performed.
+The Compose health check and PostgreSQL-backed suite were verified in an isolated
+test project bound to loopback on port 55433; the documented development port
+remains 55432. Earlier verification also passed against native PostgreSQL 18.6.
+No throughput, multi-host deployment, database crash/power-loss, or
+high-availability benchmark has been performed. Lost commit acknowledgements
+have not been directly fault-injected.
+
+Verified 2026-10-18 for the bounded agent increment: 194 passing tests/subtests
+in both ordinary and race-checked suites, no skipped tests, static analysis, and
+builds for API, worker, database tool, and evaluator. Docker PostgreSQL 18.6 tests
+include v1 profile migration preservation, profile mismatch rejection, concurrent
+fresh migration startup, and HTTP-to-worker agent execution with a local Gemini
+protocol fixture. Provider requests are canceled after forced lease loss. These
+checks make no requests to Google.
+
+A manually run live evaluation reported on 2026-10-19 used `gemini-3.8-flash` and
+passed both synthetic cases and the heuristic rubric. Review of the reported
+diagnoses found the supported connection-pool finding in the complete-evidence
+case and appropriate uncertainty in the missing-evidence case. This standalone
+live check did not exercise the API/database/worker path and is one baseline,
+not evidence of repeated-run consistency or broad model quality.
 
 ## Operational boundaries
 
 PostgreSQL persistence does not provide database high availability or backups.
 Queue bookkeeping uses a shared short settings-row lock and has no measured
-throughput claim. There are no real model calls, broker, production authentication,
-Kubernetes manifests, resource-aware scheduling, or exactly-once external effects.
+throughput claim. Gemini mode can make external model calls; normal tests and
+default fixture mode do not. There is no broker, production authentication,
+Kubernetes deployment, resource-aware scheduling, or exactly-once external effect.

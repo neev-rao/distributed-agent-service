@@ -19,7 +19,12 @@ func run() int {
 	action := flag.String("action", "migrate", "migrate or prune (at most 100 expired terminal jobs)")
 	cfg := durable.DefaultConfig()
 	appconfig.Register(flag.CommandLine, &cfg)
+	execution := appconfig.RegisterExecution(flag.CommandLine)
 	flag.Parse()
+	if err := execution.Configure(flag.CommandLine, &cfg); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
 	if *action != "migrate" && *action != "prune" {
 		logger.Error("action must be migrate or prune")
 		return 1
