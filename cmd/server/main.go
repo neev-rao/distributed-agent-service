@@ -31,8 +31,17 @@ func runMain() int {
 	databaseURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL URL (prefer DATABASE_URL environment variable)")
 	durableConfig := durable.DefaultConfig()
 	appconfig.Register(flag.CommandLine, &durableConfig)
+	execution := appconfig.RegisterExecution(flag.CommandLine)
 	shutdownGrace := flag.Duration("shutdown-grace", 10*time.Second, "shared deadline for draining jobs and HTTP connections")
 	flag.Parse()
+	if err := execution.Configure(flag.CommandLine, &durableConfig); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	if *local && execution.Kind != "fixture" {
+		logger.Error("local mode supports only the fixture executor; use durable workers for Gemini")
+		return 1
+	}
 	if durableConfig.ExecutionTimeout <= 0 || *shutdownGrace <= 0 {
 		logger.Error("execution-timeout and shutdown-grace must be positive")
 		return 1
@@ -62,7 +71,7 @@ func runMain() int {
 			return 1
 		}
 		defer listener.Close()
-		logger.Info("service_listening", "address", listener.Addr().String(), "mode", "durable")
+		logger.Info("service_listening", "address", listener.Addr().String(), "mode", "durable", "execution_profile", durableConfig.ExecutionProfile)
 		if err := serve(ctx, listener, httpapi.NewWithBackend(store), logger, *shutdownGrace, func(context.Context) error { return nil }); err != nil {
 			logger.Error("service stopped with error", "error", err)
 			return 1

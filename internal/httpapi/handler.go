@@ -121,8 +121,8 @@ func (h *handler) submit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Provide exactly one JSON object.")
 		return
 	}
-	if input.ScenarioID != fixture.ScenarioID {
-		writeError(w, http.StatusBadRequest, "unknown_scenario", "scenario_id must be checkout-db-timeout.")
+	if !fixture.ValidScenario(input.ScenarioID) {
+		writeError(w, http.StatusBadRequest, "unknown_scenario", "scenario_id must be checkout-db-timeout or checkout-insufficient-evidence.")
 		return
 	}
 	keys := r.Header.Values("Idempotency-Key")

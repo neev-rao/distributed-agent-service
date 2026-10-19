@@ -2,7 +2,8 @@
 
 The API and worker processes share PostgreSQL as the authoritative job store and
 queue. Each process uses a connection pool. No transaction stays open while an
-executor runs. The fixture remains deterministic and read-only.
+executor runs. Fixture mode is deterministic; optional Gemini workers execute a
+bounded model loop with read-only fixture tools. See [agent.md](agent.md).
 
 ## Admission and submission retries
 
@@ -16,8 +17,9 @@ broker implementation or a demonstrated scalability claim.
 characters without spaces. Matching keys and canonical input (`scenario_id`)
 return the same job ID while retained, even when admission is otherwise full.
 Reusing a key for different input conflicts. Without a key, resubmission can
-create another job. The current HTTP workload supports one scenario; conflict
-handling is also tested directly against the storage contract with distinct input.
+create another job. The current HTTP workload supports two synthetic scenarios;
+canonical input is their scenario ID. Executor/model policy is pinned to the
+whole database rather than selected by an individual submission.
 
 A connection failure during commit can leave the caller uncertain whether the
 job exists. A storage error returns `503` instead of pretending nothing happened;
@@ -97,6 +99,11 @@ Versioned embedded SQL migrations run transactionally under a startup advisory
 lock. The first initialization persists the shared execution policy; later API,
 worker, and database-tool startup rejects mismatched policy flags. Changing that
 policy requires a coordinated database migration, not a rolling flag change.
+Migration 002 labels existing databases `fixture-v1` and preserves all records
+and per-job time budgets. API, worker, and database tool also verify the shared
+execution profile, including the requested model and agent behavior fingerprint.
+Use a fresh development database for Gemini mode and stop older processes before
+upgrading a fixture schema; see [agent.md](agent.md) for the transition contract.
 
 A single local PostgreSQL instance and persistent volume do not provide database
 high availability, backups, tenant isolation, or production authentication. The

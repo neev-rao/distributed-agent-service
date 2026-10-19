@@ -5,11 +5,13 @@ worker concurrency, execution deadlines, and job status retrieval.
 
 The current implementation separates the API from worker processes and uses
 PostgreSQL for durable jobs, idempotent submission, renewable ownership, and
-bounded crash recovery. The executor remains deterministic; model-directed tools
-and Kubernetes deployment are future milestones.
+bounded crash recovery. Workers can use a deterministic fixture or an optional
+Gemini investigation loop with validated read-only tools and bounded execution.
 
-The demonstration workload investigates synthetic checkout incidents using fixed
-metrics, logs, and runbook evidence. It does not call a model or live service.
+The workload investigates synthetic checkout incidents using metrics, logs, and
+runbook evidence. Fixture mode returns a fixed result. Gemini mode calls a hosted
+model to choose tools and synthesize a diagnosis; it requires a provider key and
+an explicit model. Live production connectors and Kubernetes remain future work.
 
 With Go and a PostgreSQL database configured via `DATABASE_URL`:
 
@@ -21,6 +23,8 @@ go run ./cmd/worker
 
 The API listens on `127.0.0.1:8080` by default. See the
 [operating guide](docs/run.md) for requests, verification, and limitations.
+For the model-backed setup and separate live evaluation, see the
+[investigation executor guide](docs/agent.md).
 
 - [Agent working guide](AGENTS.md): collaboration rules and current project state.
 - [MVP design](docs/design.md): scope, request lifecycle, state, and tradeoffs.

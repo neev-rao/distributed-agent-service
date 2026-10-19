@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/neev-rao/distributed-agent-service/internal/durable"
 	"github.com/neev-rao/distributed-agent-service/internal/jobs"
@@ -132,6 +133,9 @@ func (r *Runtime) work(claimRoot, executionRoot context.Context) {
 func (r *Runtime) execute(root context.Context, attempt durable.Attempt, deadline time.Time) {
 	ctx, cancel := context.WithDeadline(root, deadline)
 	defer cancel()
+	ctx = jobs.WithExecutionMetadata(ctx, jobs.ExecutionMetadata{
+		JobID: attempt.Job.ID, AttemptToken: attempt.Token, Attempt: attempt.Job.Attempt,
+	})
 	r.logger.Info("job_claimed", "worker_id", r.config.WorkerID, "job_id", attempt.Job.ID,
 		"attempt_token", attempt.Token, "execution_deadline", attempt.Deadline)
 	if root.Err() != nil {
@@ -161,7 +165,7 @@ func (r *Runtime) execute(root context.Context, attempt durable.Attempt, deadlin
 	case !time.Now().Before(deadline) || errors.Is(ctx.Err(), context.DeadlineExceeded):
 		failure = &jobs.JobError{Code: "execution_timeout", Message: "execution deadline exceeded"}
 	case executionErr != nil:
-		failure = &jobs.JobError{Code: "execution_failed", Message: "executor returned an error"}
+		failure = executionFailure(executionErr)
 	default:
 		encoded, err := json.Marshal(result)
 		if err != nil || len(encoded) > r.config.MaxResultBytes {
@@ -169,6 +173,25 @@ func (r *Runtime) execute(root context.Context, attempt durable.Attempt, deadlin
 		}
 	}
 	r.complete(attempt, result, failure)
+}
+
+func executionFailure(err error) *jobs.JobError {
+	fallback := &jobs.JobError{Code: "execution_failed", Message: "executor returned an error"}
+	var classified jobs.ExecutionFailure
+	if !errors.As(err, &classified) {
+		return fallback
+	}
+	failure := classified.Failure()
+	if len(failure.Code) == 0 || len(failure.Code) > 64 || len(failure.Message) == 0 ||
+		len(failure.Message) > 256 || !utf8.ValidString(failure.Message) {
+		return fallback
+	}
+	for _, c := range failure.Code {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return fallback
+		}
+	}
+	return &failure
 }
 
 func (r *Runtime) monitor(ctx, root context.Context, cancel context.CancelFunc, attempt durable.Attempt, lost *atomic.Bool, stop <-chan struct{}) {

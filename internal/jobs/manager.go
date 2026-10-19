@@ -39,6 +39,13 @@ type JobError struct {
 	Message string `json:"message"`
 }
 
+// ExecutionFailure lets a trusted executor publish an inspectable, sanitized
+// failure without coupling the worker to a particular model provider.
+type ExecutionFailure interface {
+	error
+	Failure() JobError
+}
+
 type Job struct {
 	ID          string     `json:"id"`
 	ScenarioID  string     `json:"scenario_id"`

@@ -1,6 +1,8 @@
 # Build plan
 
-Status: durable execution milestone implemented on 2026-10-17. See
+Status: durable execution implemented on 2026-10-17; bounded model/tool execution
+implemented and verified offline on 2026-10-18. A manually reported live baseline
+passed both synthetic cases on 2026-10-19. See
 [run.md](run.md) for operation and verification, and [design.md](design.md) for
 architecture and future proposals.
 
@@ -99,9 +101,31 @@ PostgreSQL integration tests use isolated schemas and require TEST_DATABASE_URL.
 The explicit integration script fails when that variable is absent rather than
 silently reporting skipped database checks as verification.
 
-## Next milestone
+## Bounded agent increment
 
-Define a concrete model/tool task and objective evaluation criteria before adding
-the bounded agent runtime. Keep model quality separate from execution reliability.
-Resource-aware scheduling, Kubernetes, and product differentiation require their
-own scoped designs and evidence.
+The existing executor boundary now supports one Gemini model and three strict,
+read-only fixture tools. Four model requests and six read-tool calls fit within
+a per-attempt execution deadline; sizes, output structure, and retrieved evidence
+IDs are validated. The worker still owns lifecycle and lease cancellation. Shared
+database profiles reject inconsistent executor/model/prompt/limit configurations.
+The two cases are the checkout connection incident and missing diagnostic data.
+
+Scripted model tests cover invalid actions, unsupported citations, exhausted
+budgets, cancellation, and session isolation. Local provider HTTP fixtures cover
+wire format, preserved signatures, bounded replies, no retries/redirects, and
+sanitized failures. Docker-backed pipeline tests exercise real admission,
+execution, result retrieval, provider failure, and lease-loss cancellation.
+The complete ordinary and race-checked suites passed with 194 test/subtest results.
+
+## Next evidence required
+
+The first manually reported live evaluation with `gemini-3.8-flash` passed both
+fixtures and the heuristic rubric on 2026-10-19. Review of the supplied output
+found appropriate supported findings and uncertainty. The English-language rubric
+is not a correctness proof, and a single run does not establish consistent quality.
+
+Extend the evaluation with varied and contradictory evidence and repeated runs;
+record requested model, execution profile, latency, and failures alongside results.
+The opt-in command is documented in [agent.md](agent.md). Use that evidence to
+refine the task before adding deployment or measurement work. Resource-aware
+scheduling and Kubernetes require their own scoped designs and evidence.
