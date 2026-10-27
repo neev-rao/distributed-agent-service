@@ -4,7 +4,10 @@ Status: durable execution implemented, 2026-10-17. The default API and separate
 workers share PostgreSQL. The original volatile mode remains available explicitly
 with `-local`. See [run.md](run.md) and [durability.md](durability.md) for the
 current operating and failure contracts. Optional bounded model execution is
-implemented; see [agent.md](agent.md). Kubernetes remains a future milestone.
+implemented; see [agent.md](agent.md). A local Kubernetes deployment is now
+implemented; see [kubernetes.md](kubernetes.md).
+Application images and the complete Compose deployment are now implemented;
+see [run.md](run.md) for health, resource, and lifecycle contracts.
 
 ## Problem and example
 
@@ -146,13 +149,24 @@ process. Bounded cleanup removes eligible terminal records after retention.
 
 ## Kubernetes mapping and scope
 
-After local distributed execution works, deploy an API Deployment with a
-ClusterIP Service, a worker Deployment, and PostgreSQL backed by persistent
-storage in a local development cluster. Workers pull jobs and do not require a
-Service for inbound dispatch. Use port-forwarding for the initial demo. A single
+The existing container deployment supplies a shared API/worker image, direct
+SIGTERM handling, and `/livez` / `/readyz` endpoints. Readiness includes database
+reachability and drain state; it does not contact a model provider. Workers need
+an explicitly enabled health listener and no inbound dispatch Service. Compose
+verification exercises the existing lease contract across actual container
+failure. The Kubernetes smoke test additionally covers deployment, competing
+workers, API replacement, and database Pod replacement with the same volume.
+Detailed worker-pod failure and drain correctness remain a separate increment.
+
+The local kind cluster runs an API Deployment with an internal Service, a worker
+Deployment with two replicas, and one PostgreSQL StatefulSet with a persistent
+claim. Workers pull jobs and do not require a Service for inbound dispatch.
+The fixture/Gemini overlays use separate namespaces, Secrets, and volumes.
+Access is through loopback port-forwarding. A single
 database with a volume is not a highly available database or a backup strategy.
 
-Add resource requests/limits, appropriate health probes, and tested shutdown.
+Resource requests/limits and startup/readiness/liveness probes are configured.
+Migration init containers reuse the existing transactional database tool.
 Worker readiness is a signal for operations; application code must stop claims
 during draining. Do not make liveness depend on a model provider being reachable.
 Account for the Pod termination grace period in the drain policy; test actual
@@ -184,5 +198,8 @@ Model-directed fixture tools are implemented with scripted and HTTP-fixture test
 coverage. A manually reported live evaluation with `gemini-3.8-flash` on
 2026-10-19 passed both synthetic cases and the heuristic rubric; the supplied
 diagnoses appropriately distinguished observations from uncertain causes.
-Broader model accuracy and consistency remain unmeasured. Kubernetes is
-unimplemented; no throughput or production-availability claim is made.
+Broader model accuracy and consistency remain unmeasured. The real Kubernetes
+smoke test passed on 2026-10-26, including preserved results across database Pod
+replacement and idle Gemini initialization without provider calls. Worker-pod
+crash/termination demonstrations, observability, and measurement remain future
+work; no throughput or production-availability claim is made.

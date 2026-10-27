@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: agent-worker
+  template:
+    metadata:
+      labels:
+        app: agent-worker
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: migrate
+          image: distributed-agent-service:local
+          imagePullPolicy: Never
+          command: [/app/dbtool]
+          args:
+            - -executor=$(EXECUTOR)
+            - -execution-timeout=$(EXECUTION_TIMEOUT)
+            - -queue-capacity=$(QUEUE_CAPACITY)
+            - -max-records=$(MAX_RECORDS)
+            - -max-attempts=$(MAX_ATTEMPTS)
+            - -max-result-bytes=$(MAX_RESULT_BYTES)
+            - -lease-duration=$(LEASE_DURATION)
+            - -retry-backoff=$(RETRY_BACKOFF)
+            - -retention=$(RETENTION)
+          envFrom: &config
+            - configMapRef:
+                name: app-config
+          env: &database
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: database
+                  key: DATABASE_URL
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 64Mi}
+          securityContext: &security
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      containers:
+        - name: worker
+          image: distributed-agent-service:local
+          imagePullPolicy: Never
+          command: [/app/worker]
+          args:
+            - -health-listen=0.0.0.0:8081
+            - -shutdown-grace=40s
+            - -executor=$(EXECUTOR)
+            - -execution-timeout=$(EXECUTION_TIMEOUT)
+            - -queue-capacity=$(QUEUE_CAPACITY)
+            - -max-records=$(MAX_RECORDS)
+            - -max-attempts=$(MAX_ATTEMPTS)
+            - -max-result-bytes=$(MAX_RESULT_BYTES)
+            - -lease-duration=$(LEASE_DURATION)
+            - -retry-backoff=$(RETRY_BACKOFF)
+            - -retention=$(RETENTION)
+          envFrom: *config
+          env: *database
+          ports:
+            - {name: health, containerPort: 8081}
+          startupProbe:
+            httpGet: {path: /livez, port: health}
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /livez, port: health}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: '1', memory: 256Mi}
+          securityContext: *security
