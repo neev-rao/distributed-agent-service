@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target:
+      kind: ConfigMap
+      name: app-config
+    patch: |-
+      - op: replace
+        path: /data/EXECUTOR
+        value: gemini
+      - op: replace
+        path: /data/EXECUTION_TIMEOUT
+        value: 30s
+  - target:
+      kind: Deployment
+      name: worker
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: gemini
+              key: GEMINI_API_KEY

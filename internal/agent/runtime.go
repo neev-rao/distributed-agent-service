@@ -158,7 +158,7 @@ func (e *Executor) Execute(ctx context.Context, scenario string) (jobs.Result, e
 	if err := ctx.Err(); err != nil {
 		return jobs.Result{}, err
 	}
-	if _, ok := ctx.Deadline(); !ok || !fixture.ValidScenario(scenario) {
+	if _, ok := ctx.Deadline(); !ok || !fixture.ValidInvestigationScenario(scenario) {
 		return jobs.Result{}, &Error{Code: "agent_configuration"}
 	}
 	session, err := e.provider.NewSession(investigationPrompt)

@@ -6,6 +6,20 @@ passed both synthetic cases on 2026-10-19. See
 [run.md](run.md) for operation and verification, and [design.md](design.md) for
 architecture and future proposals.
 
+The evaluation harness was expanded on 2026-10-25 with alternative/conflicting
+evidence, bounded repetitions, scenario filtering, versioned report metadata,
+timing, and explicit failure/partial-run accounting. This increment was verified
+offline; live results for the expanded suite remain to be collected.
+The full ordinary and race-checked suites each passed 244 test/subtest results,
+including PostgreSQL integration tests, with no skipped tests. Formatting,
+static analysis, and all four executable builds also passed.
+
+The container increment adds a reproducible API/worker/PostgreSQL Compose
+deployment, readiness/liveness endpoints, a Go probe, and opt-in real-container
+lifecycle verification. This completes application packaging toward milestone 4;
+Kubernetes deployment and basic persistence verification were implemented on
+2026-10-26. Detailed worker-pod recovery/termination evidence remains outstanding.
+
 ## Milestones
 
 | Milestone | Deliverable | Exit evidence |
@@ -117,15 +131,78 @@ sanitized failures. Docker-backed pipeline tests exercise real admission,
 execution, result retrieval, provider failure, and lease-loss cancellation.
 The complete ordinary and race-checked suites passed with 194 test/subtest results.
 
-## Next evidence required
+## Evaluation increment
+
+The standalone evaluator now runs four evidence cases, including payment
+gateway timeouts with available database capacity and conflicting pool signals.
+The new cases are evaluation-only: public admission stays limited to the two
+original scenarios, preserving existing worker profiles and durable jobs. The
+checkout task prompt stays fixed; arbitrary task submission is a separate design.
+
+Acceptance evidence covers 1 to 10 sequential repetitions, single-case filtering,
+no provider use for listing/invalid input, separate execution/heuristic failures,
+partial reports on cancellation, and independent conversations with correct tool
+evidence through the Gemini HTTP adapter. Reports retain full diagnoses, model,
+worker/suite identity, per-investigation timing, and requested/completed counts.
+There are no automatic retries or new runtime dependencies.
+
+## Container deployment increment
+
+The Dockerfile builds static Go API, worker, database-tool, and probe executables
+using pinned base images. The minimal non-root runtime contains the HTTPS trust
+bundle. The application Compose overlay uses one image for independently scaled
+API/workers, container-internal PostgreSQL addressing, runtime-only worker model
+credentials, loopback API publication, resource limits, and preserved DB policy.
+
+Readiness checks initialized, non-draining lifecycle plus bounded database
+reachability. Liveness stays independent of dependencies. Worker health listeners
+are optional for host processes; Compose uses them without host port publication.
+SIGTERM reaches Go directly, with a forty-second worker drain inside a forty-five
+second container stop grace. Existing job, lease, timeout, and retry semantics
+are unchanged.
+
+The explicit `containers` build-tag test verifies the built deployment with two
+workers, four active slots, keyed replay, queued-job persistence on API restart,
+SIGKILL recovery, database outage/recovery, and graceful active-job drain. It
+uses disposable owned resources and makes no model calls. Normal Go tests remain
+independent of Docker unless a PostgreSQL test URL is explicitly configured.
+Both full Go suites passed 257 test/subtest results, with no skipped tests or
+detected races. Static analysis and all five executable builds passed. The actual
+Compose lifecycle test passed, including idle Gemini startup with placeholder
+credentials in a separate fresh database and missing-key rejection. Live provider
+behavior remains outside that verification.
+
+## Local Kubernetes deployment increment
+
+The kind configuration pins Kubernetes v1.37.0. Kustomize base/fixture/Gemini
+overlays deploy the existing image, one API, two workers, native probes, resource
+requests/limits, and a single PostgreSQL StatefulSet with a 2 GiB persistent claim.
+Migration init containers reuse existing startup/profile checks. Credentials are
+created from ignored data files, provider keys reach only Gemini workers, and
+fixture/Gemini namespaces have separate volumes. Setup scripts use dedicated
+kubeconfigs and ownership checks without changing a default context.
+
+The explicit `kubernetes` build-tag test passed on 2026-10-26 using kind v0.33.0,
+kubectl/Kubernetes v1.37.0, and PostgreSQL 18.6. It verified two workers/four slots,
+keyed replay, reapplication, API replacement, database Pod replacement retaining
+the same PVC/result, idle Gemini startup in another namespace, profile-change
+rejection, and unrelated kubeconfig integrity. It made no provider requests.
+Both full Go suites passed 257 test/subtest results with no skips or detected
+races; static analysis, five builds, and the existing Compose regression passed.
+
+## Next evidence and implementation
 
 The first manually reported live evaluation with `gemini-3.8-flash` passed both
 fixtures and the heuristic rubric on 2026-10-19. Review of the supplied output
 found appropriate supported findings and uncertainty. The English-language rubric
 is not a correctness proof, and a single run does not establish consistent quality.
 
-Extend the evaluation with varied and contradictory evidence and repeated runs;
-record requested model, execution profile, latency, and failures alongside results.
-The opt-in command is documented in [agent.md](agent.md). Use that evidence to
-refine the task before adding deployment or measurement work. Resource-aware
-scheduling and Kubernetes require their own scoped designs and evidence.
+Run the expanded opt-in suite with repeated live investigations and manually
+review diagnoses against all four cases. Also demonstrate a live Gemini job
+through the full API/PostgreSQL/worker path. The commands and report semantics
+are documented in [agent.md](agent.md). Keep live model results separate from
+offline and deployment reliability evidence. The next implementation slice is
+Kubernetes worker-pod failure and graceful termination: demonstrate interrupted
+attempt recovery, stale-result protection, draining, and bounded shutdown under
+actual pod lifecycle operations. Observability and measurement follow. Resource-aware
+scheduling remains outside the current MVP.

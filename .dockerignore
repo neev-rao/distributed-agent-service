@@ -1,0 +1,17 @@
+# Allow only the source and module files needed to build the executables.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+**/*_test.go
+# Also reject local material accidentally placed inside a source directory.
+**/.env*
+**/.local/**
+**/.git/**
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx

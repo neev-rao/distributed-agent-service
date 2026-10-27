@@ -45,3 +45,12 @@ func TestExecutionProfileConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// Evaluation-only observations do not alter existing durable jobs or their
+// execution configuration. Expanding public admission would require versioning.
+func TestEvaluationIncrementPreservesExistingWorkerProfile(t *testing.T) {
+	const baseline = "gemini-rest-v1:661e0818599c67148aad4d0d22eca7131e4cc00f017767ae7d262c45b4c76174"
+	if GeminiProfile("gemini-3.8-flash") != baseline {
+		t.Fatal("existing durable profile changed; review compatibility before deployment")
+	}
+}

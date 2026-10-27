@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  EXECUTOR: fixture
+  GEMINI_MODEL: ''
+  EXECUTION_TIMEOUT: 5s
+  QUEUE_CAPACITY: '8'
+  MAX_RECORDS: '1000'
+  MAX_ATTEMPTS: '3'
+  MAX_RESULT_BYTES: '65536'
+  LEASE_DURATION: 10s
+  RETRY_BACKOFF: 1s
+  RETENTION: 24h

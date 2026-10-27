@@ -1,0 +1,2 @@
+# Keep Linux containers and WSL scripts portable across Windows checkouts.
+* text=auto eol=lf

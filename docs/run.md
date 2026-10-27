@@ -1,5 +1,104 @@
 # Operating guide
 
+For the local kind/Kubernetes deployment, see [kubernetes.md](kubernetes.md).
+The Compose and host workflows below remain supported independently.
+
+## Run the complete application with Docker Compose
+
+Docker Desktop/the Docker engine and Compose are sufficient for the application;
+Go is required only for host development and the Go test commands below. The
+existing `compose.yaml` still runs PostgreSQL alone. Add `compose.app.yaml` to
+build and start separate API and worker containers from the same image.
+
+For a new configuration, copy `.env.example` to an ignored `.env` and replace the
+development password consistently. For an existing `.env`, preserve its values
+and add `CONTAINER_DATABASE_URL` and `AGENT_EXECUTOR=fixture` from the example.
+Use the matching credentials and database name; URL-encode special characters
+in URL credentials. The programs never rewrite an existing database's policy.
+
+```sh
+docker compose -f compose.yaml -f compose.app.yaml up --build -d --wait
+docker compose -f compose.yaml -f compose.app.yaml ps
+curl http://127.0.0.1:8080/readyz
+```
+
+The container URL uses `postgres:5432`, the database's service name and internal
+port. Host commands keep using `DATABASE_URL` with `127.0.0.1:55432`. Inside a
+container, `localhost` refers to that container, not the PostgreSQL service.
+The API binds to all interfaces inside its container, but its published port is
+restricted to host loopback. Worker health ports are not published. Override
+`APP_API_PORT` if a host API already occupies port 8080.
+
+Compose waits for PostgreSQL's health check before starting the application.
+Each process still applies/verifies migrations and the shared execution profile
+before becoming ready. A readiness check never runs migrations or model calls.
+API readiness requires storage, not the presence of a worker: accepted work can
+remain queued until workers start.
+
+```sh
+# Two workers, each with two execution slots. Queue limits remain global.
+docker compose -f compose.yaml -f compose.app.yaml up -d --scale worker=2
+docker compose -f compose.yaml -f compose.app.yaml logs -f api worker
+
+# Stop processes while keeping the database volume and accepted jobs.
+docker compose -f compose.yaml -f compose.app.yaml down
+# Recreate containers and reuse that same project/database volume.
+docker compose -f compose.yaml -f compose.app.yaml up -d --wait
+```
+
+Use a consistent Compose project name and environment file for every operation.
+`down` preserves the volume; adding `--volumes` deletes that project's data and
+is appropriate only for an intentionally disposable database. Do not use it as
+an ordinary shutdown command. The application overlay reuses the existing
+database volume in the same project; it does not create a fresh policy implicitly.
+
+## Container runtime and health contract
+
+The Dockerfile pins both base-image digests. Its build stage verifies Go modules
+and compiles static API, worker, database-tool, and probe executables. The final
+non-root runtime includes a trusted CA bundle for HTTPS; it has no shell, Go
+compiler, source tree, or credentials. `.dockerignore` allows only Go source and
+module files, excluding tests, environment files, private notes, and Git history.
+Refresh base-image digests deliberately and repeat the build and verification.
+
+Compose uses a read-only application filesystem, drops Linux capabilities, and
+prevents privilege escalation. The API defaults to 0.5 CPU/128 MiB; each worker
+defaults to 1 CPU/256 MiB. `API_CPUS`, `API_MEMORY`, `WORKER_CPUS`, and
+`WORKER_MEMORY` override those local development limits. These values are initial
+operating limits, not measured capacity or performance claims.
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET /livez` | `200` while the HTTP process responds, independent of database/provider state |
+| `GET /readyz` | `200` after initialization when storage is reachable and drain has not begun; otherwise `503` |
+
+Health responses do not reveal database errors or credentials. The database
+check is bounded to one second. Explicit `-local` mode checks only lifecycle.
+Readiness does not verify model access, job quality, free worker capacity, or the
+progress of every goroutine. Worker health is enabled by `-health-listen` in
+Compose and disabled by default for host worker processes.
+
+`/app/probe` is a small Go HTTP client. It exits zero only for `200`, refuses
+redirects, and defaults to a two-second request timeout. Compose runs it every
+two seconds against readiness. Docker marks failed checks unhealthy; Compose
+does not automatically restart or stop claiming work merely because that status
+changes. During database outages the job API returns storage errors and workers
+retain their existing cancellation/recovery behavior. Provider failures stay job
+execution failures and do not cause health-driven restart loops.
+
+The server/worker executable is the container's main process, so SIGTERM reaches
+Go directly. The API keeps its ten-second drain grace. Compose configures each
+worker with a forty-second grace, including fixture mode, and allows forty-five
+seconds before Docker can force termination. While a worker drains, readiness
+is false, liveness stays true, and the runtime stops claims while renewing active
+leases. If overriding commands or grace periods, keep the outer stop grace
+longer than the application's drain grace. A killed/expired worker can still
+cause repeated external execution; containers do not change the lease contract.
+
+References: [Compose startup order](https://docs.docker.com/compose/how-tos/startup-order/),
+[service lifecycle settings](https://docs.docker.com/reference/compose-file/services/),
+and [Distroless static image contents](https://github.com/GoogleContainerTools/distroless/blob/main/base/README.md).
+
 ## Start PostgreSQL, API, and workers
 
 Requirements: Go 1.25 or newer, plus PostgreSQL 18. Docker Compose supplies a local
@@ -192,6 +291,25 @@ limits, result/deadline enforcement, retention, and explicit database errors.
 Worker tests use controlled executors for lease loss, deadlines, slot ownership,
 shutdown, and database uncertainty.
 
+With Docker running, explicitly opt into the real-image lifecycle test:
+
+```sh
+go test -tags=containers -v -count=1 -timeout=10m ./internal/containertest
+```
+
+It builds/starts a uniquely named Compose project on random loopback ports with
+two workers and a three-second fixture delay. It checks four active slots,
+keyed replay, API restart persistence, SIGKILL recovery on attempt two, actual
+database outage/readiness recovery, and SIGTERM draining without further claims.
+It also checks image identity, non-root execution, runtime constraints, the CA
+bundle, and lack of published worker ports. The test does not load `.env` or
+`.env.agent`; ownership labels are verified before removing its containers,
+network, volume, and image tag. It is excluded from the normal suite by a build
+tag and does not require or call a live model provider.
+The final phase starts an idle Gemini pool in a fresh database using placeholder
+credentials and verifies missing-key rejection. It validates deployment wiring
+and preflight only; no investigation is submitted to that pool.
+
 Build standalone processes for a recovery demonstration:
 
 ```sh
@@ -225,13 +343,29 @@ No throughput, multi-host deployment, database crash/power-loss, or
 high-availability benchmark has been performed. Lost commit acknowledgements
 have not been directly fault-injected.
 
-Verified 2026-10-18 for the bounded agent increment: 194 passing tests/subtests
+Verified 2026-10-25 after the container increment: 257 passing tests/subtests
 in both ordinary and race-checked suites, no skipped tests, static analysis, and
-builds for API, worker, database tool, and evaluator. Docker PostgreSQL 18.6 tests
+builds for API, worker, database tool, evaluator, and probe. Docker PostgreSQL 18.6 tests
 include v1 profile migration preservation, profile mismatch rejection, concurrent
 fresh migration startup, and HTTP-to-worker agent execution with a local Gemini
 protocol fixture. Provider requests are canceled after forced lease loss. These
 checks make no requests to Google.
+
+The evaluator additionally covers alternative and conflicting evidence, fresh
+conversations across repeated investigations, filters and limits, failure
+classification, partial reports on cancellation, and CLI preflight/output
+behavior. A local HTTP model fixture verifies the complete evaluation/agent/
+Gemini transport/tool path for all four cases. The public API continues accepting
+only the original two scenarios. See [agent.md](agent.md) for live evaluation
+commands and the distinction between heuristic passes and model correctness.
+
+The opt-in container lifecycle test also passed using Docker Engine 29.2.1,
+Compose 5.0.2, and the pinned Go 1.25.14 builder. Host tests used Go 1.27.2 on
+Ubuntu WSL. The complete one-command Compose build/start, two-worker execution,
+API restart, worker kill/recovery, database outage, and graceful drain were
+observed. An idle Gemini pool initialized against a separate fresh database
+using placeholder credentials; missing-key startup failed. These container checks
+made no model requests and do not establish live Gemini access or quality.
 
 A manually run live evaluation reported on 2026-10-19 used `gemini-3.8-flash` and
 passed both synthetic cases and the heuristic rubric. Review of the reported
@@ -246,4 +380,5 @@ PostgreSQL persistence does not provide database high availability or backups.
 Queue bookkeeping uses a shared short settings-row lock and has no measured
 throughput claim. Gemini mode can make external model calls; normal tests and
 default fixture mode do not. There is no broker, production authentication,
-Kubernetes deployment, resource-aware scheduling, or exactly-once external effect.
+resource-aware scheduling or exactly-once external effect. Local Kubernetes
+deployment is documented and verified separately in [kubernetes.md](kubernetes.md).

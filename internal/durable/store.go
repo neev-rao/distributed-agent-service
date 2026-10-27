@@ -82,6 +82,10 @@ func Open(ctx context.Context, dsn string, config Config) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// Ping checks database reachability without changing schema, policy, or jobs.
+// Callers own the deadline; readiness must never block on an unbounded check.
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 // Migrate atomically applies versioned embedded SQL. An advisory transaction
 // lock coordinates concurrent process startup before the settings row exists.
 // A mismatched runtime configuration is rejected rather than silently changing
