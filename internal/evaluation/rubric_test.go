@@ -16,7 +16,7 @@ func TestRubricSeparatesFindingUncertaintyAndEvidence(t *testing.T) {
 	if Assess(fixture.ScenarioID, result).Pass() {
 		t.Fatal("unsupported finding accepted")
 	}
-	result = jobs.Result{Diagnosis: "Checkout errors increased, but there is insufficient evidence to determine the cause.", EvidenceIDs: []string{"metrics.checkout.errors", "logs.checkout.unavailable"}}
+	result = jobs.Result{Diagnosis: "Checkout errors increased, but there is insufficient evidence to determine the cause.", EvidenceIDs: []string{"metrics.checkout.errors", "logs.checkout.unavailable", "metrics.database.unavailable"}}
 	if !Assess(fixture.InsufficientScenarioID, result).Pass() {
 		t.Fatal("insufficient evidence finding rejected")
 	}

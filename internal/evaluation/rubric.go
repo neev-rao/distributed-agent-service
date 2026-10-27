@@ -1,5 +1,5 @@
 // Package evaluation supplies transparent, deliberately limited checks for the
-// two synthetic incidents. Passing these checks is not proof of factual quality.
+// synthetic incidents. Passing these checks is not proof of factual quality.
 package evaluation
 
 import (
@@ -13,6 +13,22 @@ type Checks struct {
 	ExpectedFinding       bool `json:"expected_finding"`
 	StatesUncertainty     bool `json:"states_uncertainty"`
 	CitesRelevantEvidence bool `json:"cites_relevant_evidence"`
+}
+
+// Case publishes review expectations, never instructions sent to the model.
+type Case struct {
+	Scenario         string   `json:"scenario_id"`
+	ExpectedBehavior string   `json:"expected_behavior"`
+	RequiredEvidence []string `json:"required_evidence"`
+}
+
+func Cases() []Case {
+	return []Case{
+		{fixture.ScenarioID, "Identify connection-pool exhaustion; do not assert why connections remain occupied.", []string{"logs.checkout.db-timeout", "metrics.database.connections"}},
+		{fixture.InsufficientScenarioID, "Identify missing logs and connection metrics; the cause cannot be established.", []string{"metrics.checkout.errors", "metrics.database.unavailable", "logs.checkout.unavailable"}},
+		{fixture.PaymentScenarioID, "Identify observed payment-gateway timeouts and healthy pool capacity; why the gateway timed out is unknown.", []string{"logs.checkout.payment-timeout", "metrics.database.healthy"}},
+		{fixture.ConflictingScenarioID, "Acknowledge conflicting pool observations from the same window; reconcile source/pool identity before confirming a cause.", []string{"logs.checkout.db-timeout", "metrics.database.healthy"}},
+	}
 }
 
 func (c Checks) Pass() bool {
@@ -30,18 +46,42 @@ func Assess(scenario string, result jobs.Result) Checks {
 	for _, id := range result.EvidenceIDs {
 		cited[id] = true
 	}
+	// Every required diagnostic signal must be cited. Provenance (whether an ID
+	// was actually retrieved) remains the agent runtime's separate responsibility.
+	relevant := false
+	for _, item := range Cases() {
+		if item.Scenario == scenario {
+			relevant = true
+			for _, id := range item.RequiredEvidence {
+				relevant = relevant && cited[id]
+			}
+		}
+	}
 	switch scenario {
 	case fixture.ScenarioID:
 		return Checks{
 			ExpectedFinding:       strings.Contains(text, "pool") && containsAny(text, "exhaust", "saturat", "all connections", "capacity"),
 			StatesUncertainty:     uncertain,
-			CitesRelevantEvidence: cited["logs.checkout.db-timeout"] && cited["metrics.database.connections"],
+			CitesRelevantEvidence: relevant,
 		}
 	case fixture.InsufficientScenarioID:
 		return Checks{
 			ExpectedFinding:       containsAny(text, "error", "failure") && uncertain,
 			StatesUncertainty:     uncertain,
-			CitesRelevantEvidence: cited["metrics.checkout.errors"] && len(cited) >= 2,
+			CitesRelevantEvidence: relevant,
+		}
+	case fixture.PaymentScenarioID:
+		return Checks{
+			ExpectedFinding: strings.Contains(text, "payment") && containsAny(text, "timeout", "timed out", "timing out") &&
+				strings.Contains(text, "pool") && containsAny(text, "healthy", "available", "spare", "not exhausted"),
+			StatesUncertainty:     uncertain,
+			CitesRelevantEvidence: relevant,
+		}
+	case fixture.ConflictingScenarioID:
+		return Checks{
+			ExpectedFinding:       strings.Contains(text, "pool") && containsAny(text, "conflict", "contradict", "inconsisten", "disagree"),
+			StatesUncertainty:     uncertain,
+			CitesRelevantEvidence: relevant,
 		}
 	default:
 		return Checks{}

@@ -126,6 +126,8 @@ func TestInvalidSubmissionsAndRoutes(t *testing.T) {
 		{"trailing garbage", "POST", "/jobs", validBody + " garbage", 400, "invalid_request", ""},
 		{"missing scenario", "POST", "/jobs", "{}", 400, "unknown_scenario", ""},
 		{"unknown scenario", "POST", "/jobs", `{"scenario_id":"missing"}`, 400, "unknown_scenario", ""},
+		{"evaluation-only payment", "POST", "/jobs", `{"scenario_id":"checkout-payment-timeout"}`, 400, "unknown_scenario", ""},
+		{"evaluation-only conflict", "POST", "/jobs", `{"scenario_id":"checkout-conflicting-evidence"}`, 400, "unknown_scenario", ""},
 		{"null", "POST", "/jobs", "null", 400, "unknown_scenario", ""},
 		{"too large", "POST", "/jobs", strings.Repeat(" ", int(MaxRequestBytes)+1), 413, "request_too_large", ""},
 		{"oversized suffix", "POST", "/jobs", validBody + strings.Repeat(" ", int(MaxRequestBytes)), 413, "request_too_large", ""},

@@ -14,6 +14,11 @@ const ScenarioID = "checkout-db-timeout"
 // evaluations distinguish an evidence-based answer from a memorized diagnosis.
 const InsufficientScenarioID = "checkout-insufficient-evidence"
 
+// These scenarios vary only tool evidence for evaluation. They are intentionally
+// not admitted by the public API or supported by the deterministic Executor.
+const PaymentScenarioID = "checkout-payment-timeout"
+const ConflictingScenarioID = "checkout-conflicting-evidence"
+
 type Evidence struct {
 	ID   string `json:"id"`
 	Text string `json:"text"`
@@ -23,13 +28,24 @@ func ValidScenario(scenario string) bool {
 	return scenario == ScenarioID || scenario == InsufficientScenarioID
 }
 
+// EvaluationScenarios returns a fresh, stable list for sequential evaluations.
+func EvaluationScenarios() []string {
+	return []string{ScenarioID, InsufficientScenarioID, PaymentScenarioID, ConflictingScenarioID}
+}
+
+// ValidInvestigationScenario includes the public workload and evaluation-only
+// evidence variants. Public admission must continue to use ValidScenario.
+func ValidInvestigationScenario(scenario string) bool {
+	return ValidScenario(scenario) || scenario == PaymentScenarioID || scenario == ConflictingScenarioID
+}
+
 // Read returns a fresh copy of synthetic evidence for one allowlisted tool.
 // It performs no network, filesystem, database, or other external operations.
 func Read(ctx context.Context, scenario, tool string) ([]Evidence, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !ValidScenario(scenario) {
+	if !ValidInvestigationScenario(scenario) {
 		return nil, fmt.Errorf("unknown fixture scenario %q", scenario)
 	}
 	var items []Evidence
@@ -39,10 +55,19 @@ func Read(ctx context.Context, scenario, tool string) ([]Evidence, error) {
 		if scenario == InsufficientScenarioID {
 			items[1] = Evidence{"metrics.database.unavailable", "Database connection metrics are unavailable for this incident window."}
 		}
+		if scenario == PaymentScenarioID || scenario == ConflictingScenarioID {
+			items[1] = Evidence{"metrics.database.healthy", "During the 12:00-12:05 UTC incident window, database connection-pool metrics report 4 of 20 connections in use, zero waiting requests, and zero connection acquisition timeouts."}
+		}
 	case "read_logs":
 		items = []Evidence{{evidence[1].ID, evidence[1].Text}}
 		if scenario == InsufficientScenarioID {
 			items[0] = Evidence{"logs.checkout.unavailable", "Checkout request logs are unavailable for this incident window."}
+		}
+		if scenario == PaymentScenarioID {
+			items[0] = Evidence{"logs.checkout.payment-timeout", "Failed checkout requests during the 12:00-12:05 UTC incident window report payment gateway response timeouts. These request logs contain no database connection acquisition timeouts. Payment gateway internal telemetry is unavailable."}
+		}
+		if scenario == ConflictingScenarioID {
+			items[0] = Evidence{"logs.checkout.db-timeout", "Failed checkout requests during the 12:00-12:05 UTC incident window report database connection acquisition timeouts. Application connection-pool snapshots in these logs report all 20 connections in use and increasing waiting requests during that same window. Telemetry does not identify whether the log snapshots and metric series use the same pool or collection source."}
 		}
 	case "read_runbook":
 		items = []Evidence{{evidence[3].ID, evidence[3].Text}}
