@@ -1,0 +1,51 @@
+# Combine with compose.yaml. The original database-only workflow stays available.
+x-app: &app
+  image: ${APP_IMAGE:-distributed-agent-service:local}
+  pull_policy: never
+  depends_on:
+    postgres:
+      condition: service_healthy
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  stop_grace_period: 45s
+
+x-environment: &environment
+  DATABASE_URL: ${CONTAINER_DATABASE_URL:?Set CONTAINER_DATABASE_URL with postgres as the hostname and port 5432}
+  GEMINI_MODEL: ${GEMINI_MODEL:-}
+
+services:
+  api:
+    <<: *app
+    # Build the shared image once. Parallel exports under one tag can collide.
+    build:
+      context: .
+    entrypoint: [/app/server]
+    command: [-listen=0.0.0.0:8080, '-executor=${AGENT_EXECUTOR:-fixture}']
+    environment: *environment
+    ports:
+      - '127.0.0.1:${APP_API_PORT:-8080}:8080'
+    cpus: ${API_CPUS:-0.5}
+    mem_limit: ${API_MEMORY:-128m}
+    healthcheck:
+      test: [CMD, /app/probe, -url=http://127.0.0.1:8080/readyz]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  worker:
+    <<: *app
+    entrypoint: [/app/worker]
+    command: [-health-listen=0.0.0.0:8081, -shutdown-grace=40s, '-executor=${AGENT_EXECUTOR:-fixture}']
+    environment:
+      <<: *environment
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    cpus: ${WORKER_CPUS:-1.0}
+    mem_limit: ${WORKER_MEMORY:-256m}
+    healthcheck:
+      test: [CMD, /app/probe, -url=http://127.0.0.1:8081/readyz]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 15s

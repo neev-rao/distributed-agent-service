@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,6 +17,7 @@ import (
 	"github.com/neev-rao/distributed-agent-service/internal/durable"
 	"github.com/neev-rao/distributed-agent-service/internal/fixture"
 	"github.com/neev-rao/distributed-agent-service/internal/gemini"
+	"github.com/neev-rao/distributed-agent-service/internal/health"
 	"github.com/neev-rao/distributed-agent-service/internal/jobs"
 	"github.com/neev-rao/distributed-agent-service/internal/worker"
 )
@@ -31,6 +32,7 @@ func runMain() int {
 	workerID := flag.String("worker-id", "", "worker process identity (random by default)")
 	shutdownGrace := flag.Duration("shutdown-grace", 10*time.Second, "time to drain active attempts before abandoning their leases")
 	fixtureDelay := flag.Duration("fixture-delay", 0, "deterministic delay before fixture execution, for recovery demonstrations")
+	healthListen := flag.String("health-listen", "", "optional health HTTP listener; disabled by default")
 	flag.Parse()
 	if err := execution.Configure(flag.CommandLine, &storeConfig); err != nil {
 		logger.Error(err.Error())
@@ -103,10 +105,20 @@ func runMain() int {
 		logger.Error("invalid worker configuration")
 		return 1
 	}
+	var healthListener net.Listener
+	if *healthListen != "" {
+		healthListener, err = net.Listen("tcp", *healthListen)
+		if err != nil {
+			logger.Error("could not listen for worker health checks")
+			return 1
+		}
+		defer healthListener.Close()
+	}
+	status := health.New(ctx, store.Ping)
 	logger.Info("worker_ready", "worker_id", *workerID, "concurrency", config.Concurrency,
 		"lease_duration", storeConfig.LeaseDuration.String(), "execution_timeout", storeConfig.ExecutionTimeout.String(),
 		"execution_profile", storeConfig.ExecutionProfile)
-	if err := runtime.Run(ctx); err != nil && !errors.Is(err, worker.ErrDrainTimeout) {
+	if err := runWithHealth(ctx, runtime.Run, healthListener, status, logger); err != nil && err != worker.ErrDrainTimeout {
 		logger.Error("worker stopped with error")
 		return 1
 	}

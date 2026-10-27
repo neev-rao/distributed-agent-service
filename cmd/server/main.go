@@ -16,6 +16,7 @@ import (
 	"github.com/neev-rao/distributed-agent-service/internal/appconfig"
 	"github.com/neev-rao/distributed-agent-service/internal/durable"
 	"github.com/neev-rao/distributed-agent-service/internal/fixture"
+	"github.com/neev-rao/distributed-agent-service/internal/health"
 	"github.com/neev-rao/distributed-agent-service/internal/httpapi"
 	"github.com/neev-rao/distributed-agent-service/internal/jobs"
 )
@@ -72,7 +73,10 @@ func runMain() int {
 		}
 		defer listener.Close()
 		logger.Info("service_listening", "address", listener.Addr().String(), "mode", "durable", "execution_profile", durableConfig.ExecutionProfile)
-		if err := serve(ctx, listener, httpapi.NewWithBackend(store), logger, *shutdownGrace, func(context.Context) error { return nil }); err != nil {
+		status := health.New(ctx, store.Ping)
+		status.MarkReady()
+		defer status.Drain()
+		if err := serve(ctx, listener, status.Wrap(httpapi.NewWithBackend(store)), logger, *shutdownGrace, func(context.Context) error { return nil }); err != nil {
 			logger.Error("service stopped with error", "error", err)
 			return 1
 		}
@@ -110,7 +114,10 @@ func runMain() int {
 // run owns both lifecycles. HTTP shutdown stops new connections while manager
 // shutdown stops admission and drains accepted jobs. Both share one grace period.
 func run(ctx context.Context, listener net.Listener, manager *jobs.Manager, logger *slog.Logger, grace time.Duration) error {
-	return serve(ctx, listener, httpapi.New(manager), logger, grace, manager.Shutdown)
+	status := health.New(ctx, nil)
+	status.MarkReady()
+	defer status.Drain()
+	return serve(ctx, listener, status.Wrap(httpapi.New(manager)), logger, grace, manager.Shutdown)
 }
 
 func serve(ctx context.Context, listener net.Listener, handler http.Handler, logger *slog.Logger, grace time.Duration, drain func(context.Context) error) error {
